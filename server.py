@@ -17,7 +17,6 @@ def broadcast(sender_address, sender_username, message):
         try:
             conn.send(f"<{sender_username}> {message}".encode('utf-8'))
         except Exception as e:
-            print(e)
             print(f"Error sending message to {username}")
 
 def thread_client(conn, address):
