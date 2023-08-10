@@ -1,20 +1,35 @@
 import threading
 import socket
-import time
 import sys
+import signal
 
 HOST = "0.0.0.0"
 PORT = 4321
 
+server_socket = None
 clients = {}
 
+def broadcast(sender, message):
+    for address, (conn, username) in clients.items():
+        if sender == address:
+            continue
+        
+        try:
+            conn.send(f"<{username}> {message}".encode('utf-8'))
+        except Exception as e:
+            print(e)
+            print(f"Error sending message to {username}")
+
 def thread_client(conn, address):
+    #get username
+    username = conn.recv(1024).decode('utf-8')
+    clients[address] = (conn, username)
+    
+    #communication
     while True:
         try:
             message = conn.recv(1024).decode('utf-8')
-            print(message)
-            time.sleep(3)
-            conn.send("<server> recu".encode('utf-8'))
+            broadcast(address, message)
         except Exception as e:
             print(e)
             conn.close()
@@ -22,21 +37,19 @@ def thread_client(conn, address):
             break
 
 def start_server():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(4)
-    s.bind((HOST, PORT))
-    s.listen()
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.settimeout(4)
+    server_socket.bind((HOST, PORT))
+    server_socket.listen()
     print(f"Listen on {HOST}:{PORT}")
 
     while True:
         try:
-            conn, address = s.accept()
-            clients[address] = conn
+            conn, address = server_socket.accept()
             thread = threading.Thread(target=thread_client, args=(conn, address))
             thread.start()
             print(f"New client {address}")
         except TimeoutError:
-            print("timeout")
             pass
 
 if __name__ == "__main__":
