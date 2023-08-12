@@ -1,58 +1,83 @@
 import socket
 import threading
-import time
 import signal
-import sys
+import logging
+
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
+
+file_handler = logging.FileHandler("client.log", mode='w')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+log.addHandler(file_handler)
 
 SERVER = "127.0.0.1"
 PORT = 4321
-USERNAME = None
 
-def start_send(sock):
+client_socket = None
+username = ""
+
+def client_send(client_socket):
     try:
         while True:
-            print(f">{USERNAME}< ", end='')
-            message = input()
+            message = ""
+            while not message:
+                print(f"<{username}> ", end='')
+                message = input()
+                
             if message == None or len(message) < 1 :
                 pass
             else:
-                sock.send(message.encode("utf-8"))
+                client_socket.send(message.encode("utf-8"))
+    except EOFError:
+        pass
     except Exception as e:
-        print(e)
+        log.error(e)
 
 
-def start_receive(sock):
+def client_receive(client_socket):
     try:
         while True:
-            message = sock.recv(1024).decode("utf-8")
+            message = client_socket.recv(1024).decode("utf-8")
             print(f"{message}")
+    except ConnectionResetError:
+        print("Connection reset by host.")
+        log.info(f"Connection reset by host.")
+    except ConnectionAbortedError:
+        log.info(f"Connection aborted.")
     except Exception as e:
-        print(e)
+        log.error(e)
         
 
+def client():
+    global username
+    global client_socket
+    
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((SERVER, PORT))
+    
+    log.debug(f"Connected to server {SERVER} : {PORT}.")
+    print(f"Connected to server {SERVER} : {PORT}.")
+    
+    while not username:
+        print("Name: ", end='')
+        username = input()
+    client_socket.send(username.encode("utf-8"))
+    
+    send_thread = threading.Thread(target=client_send, args = (client_socket,), daemon = True)
+    receive_thread = threading.Thread(target=client_receive, args = (client_socket,), daemon = True)
+    send_thread.start()
+    receive_thread.start()
+    
+    send_thread.join()
+    receive_thread.join()
+
 def sigint_handler(sig, frame):
-    print('Program closed with ctrl+c')
-    sock.close()
-    sys.exit(0)
-
-
+    log.info("SIGINT received, closing the socket and exiting.")
+    global client_socket
+    client_socket.close()
+signal.signal(signal.SIGINT, sigint_handler)
+    
 if __name__ =="__main__":
-    
-    signal.signal(signal.SIGINT, sigint_handler)
-    
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((SERVER, PORT))
-    print(f"Connected to server {SERVER} : {PORT}")
-    
-    print("enter your username : ", end='')
-    USERNAME = input()
-    sock.send(USERNAME.encode("utf-8"))
-    
-    thread_send = threading.Thread(target=start_send, args = (sock,))
-    thread_send.start()
-    
-    thread_rcv = threading.Thread(target=start_receive, args = (sock,))
-    thread_rcv.start()
-    
-    while True:
-        time.sleep(1000)
+    client()
