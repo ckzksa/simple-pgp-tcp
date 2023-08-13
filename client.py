@@ -2,6 +2,7 @@ import socket
 import threading
 import signal
 import logging
+import message as msg
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -29,7 +30,7 @@ def client_send(client_socket):
             if message == None or len(message) < 1 :
                 pass
             else:
-                client_socket.send(message.encode("utf-8"))
+                msg.send(client_socket, message)
     except EOFError:
         pass
     except Exception as e:
@@ -39,7 +40,7 @@ def client_send(client_socket):
 def client_receive(client_socket):
     try:
         while True:
-            message = client_socket.recv(1024).decode("utf-8")
+            message = msg.receive(client_socket)
             print(f"{message}")
     except ConnectionResetError:
         print("Connection reset by host.")
@@ -63,7 +64,7 @@ def client():
     while not username:
         print("Name: ", end='')
         username = input()
-    client_socket.send(username.encode("utf-8"))
+    msg.send(client_socket, username)
     
     send_thread = threading.Thread(target=client_send, args = (client_socket,), daemon = True)
     receive_thread = threading.Thread(target=client_receive, args = (client_socket,), daemon = True)

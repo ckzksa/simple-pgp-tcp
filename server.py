@@ -3,6 +3,7 @@ import socket
 import sys
 import signal
 import logging
+import message as msg
 
 from logging.handlers import TimedRotatingFileHandler
 
@@ -37,13 +38,14 @@ def broadcast(sender_address, sender_username, message):
             continue
         
         try:
-            conn.send(f"<{sender_username}> {message}".encode('utf-8'))
+            msg.send(conn, f"<{sender_username}> {message}")
         except Exception as e:
             log.error(f"Error sending message to {username} {address}.")
 
 # Handle login
 def login(conn, address):
-    username = conn.recv(1024).decode('utf-8')
+    username = msg.receive(conn)
+    
     clients[address] = (conn, username)
     broadcast(None, "SERVER", f"{username} joined the chat")
     
@@ -56,7 +58,7 @@ def client_thread(conn, address):
     # communicate
     try:
         while True:
-            message = conn.recv(1024).decode('utf-8')
+            message = msg.receive(conn)
             if not message:
                 break
             log.debug(f"New message from {username}: {message}.")
