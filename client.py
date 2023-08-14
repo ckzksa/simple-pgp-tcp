@@ -2,6 +2,7 @@ import socket
 import threading
 import signal
 import logging
+import rich
 import message as msg
 
 log = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ def client_send(client_socket):
         while True:
             message = ""
             while not message:
-                print(f"<{username}> ", end='')
+                rich.print(f"<[bold violet]{username}[/bold violet]> ", end='')
                 message = input()
                 
             if message == None or len(message) < 1 :
