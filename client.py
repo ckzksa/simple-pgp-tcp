@@ -19,9 +19,12 @@ log.addHandler(file_handler)
 SERVER = "127.0.0.1"
 PORT = 4321
 
+class HandshakeError(Exception):
+    pass
+
 class Client():
     def __init__(self) -> None:
-        self.secure = Security(save_keys=False)
+        self.security = Security(save_keys=False)
         self.client_socket = None
         self.session_key = None
         self.nonce = None
@@ -35,7 +38,7 @@ class Client():
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((SERVER, PORT))
             
-            self.handshake(self.client_socket)
+            self.handshake(self.client_socket, b"verystrongpassword")
             
             log.debug(f"Connected to server {SERVER} : {PORT}.")
             print(f"Connected to server {SERVER} : {PORT}.")
@@ -49,12 +52,33 @@ class Client():
             receive_thread.join()
         except KeyboardInterrupt:
             log.info("SIGINT received, closing the socket and exiting.")
+        except HandshakeError:
+            log.critical()
         except Exception as e:
             log.error(e)
         finally:
             if client.client_socket:
                 client.client_socket.close()
-        
+
+    # Handle connection
+    def handshake(self, sock, passphrase: bytes=None):#TODO clear le code
+        try:
+            # send public key
+            pubkey = self.security.export_key(passphrase=passphrase)
+            self.send(sock, pubkey)
+            
+            # receive session key
+            data = self.receive(sock)
+            data = self.security.decrypt_rsa(data, key=self.security.private_key)
+            self.session_key = data[:16]
+            self.nonce = data[16:]
+            
+            # send username
+            data, _ = self.security.encrypt_aes(key=self.session_key, nonce=self.nonce, payload=self.username.encode("utf-8"))
+            self.send(sock, data)
+        except:
+            raise HandshakeError
+
     def client_send(self, client_socket):
         try:
             while True:
@@ -66,7 +90,7 @@ class Client():
                 if not payload:
                     pass
                 else:
-                    payload, _ = self.secure.encrypt_aes(self.session_key, self.nonce, payload.encode("utf-8"))
+                    payload, _ = self.security.encrypt_aes(self.session_key, self.nonce, payload.encode("utf-8"))
                     self.send(client_socket, payload)
                     
         except EOFError:
@@ -78,13 +102,15 @@ class Client():
         try:
             while True:
                 payload = self.receive(client_socket)
-                payload = self.secure.decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=payload)
+                payload = self.security.decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=payload)
                 print(f"{payload.decode('utf-8')}")
         except ConnectionResetError:
             print("Connection reset by host.")
             log.info(f"Connection reset by host.")
         except ConnectionAbortedError:
             log.info(f"Connection aborted.")
+        except HandshakeError:
+            log.critical(f"Error in handshake.")
         except Exception as e:
             log.error(e)
 
@@ -102,32 +128,12 @@ class Client():
         
         return payload[:-2]
 
-    # Handle connection
-    def handshake(self, sock):#TODO clear le code        
-        # receive server public key
-        # data = receive(sock)
-        # server_pubkey = secure.import_key(data, passphrase=b"charlie")
-        
-        # send public key
-        pubkey = self.secure.export_key()
-        self.send(sock, pubkey)
-        
-        # receive session key
-        data = self.receive(sock)
-        data = self.secure.decrypt_rsa(data, key=self.secure.private_key)
-        self.session_key = data[:16]
-        self.nonce = data[16:]
-        
-        # send username
-        data, _ = self.secure.encrypt_aes(key=self.session_key, nonce=self.nonce, payload=self.username.encode("utf-8"))
-        self.send(sock, data)
-
 if __name__ =="__main__":
     client = Client()
     client.start()
-    def sigint_handler(sig, frame):
-        log.info("SIGINT received, closing the socket and exiting.")
-        print("mehj")
-        if client.client_socket:
-            client.client_socket.close()
-    signal.signal(signal.SIGINT, sigint_handler)
+    # def sigint_handler(sig, frame):
+    #     log.info("SIGINT received, closing the socket and exiting.")
+    #     print("mehj")
+    #     if client.client_socket:
+    #         client.client_socket.close()
+    # signal.signal(signal.SIGINT, sigint_handler)

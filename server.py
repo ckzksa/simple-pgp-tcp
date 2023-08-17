@@ -77,7 +77,7 @@ class Server():
     # Handle the client
     def client_thread(self, conn, address):
         try:
-            client = self.handshake(conn, address)
+            client = self.handshake(conn, address, b"verystrongpassword")
             while True:
                 payload = self.receive(conn)
                 if not payload:
@@ -92,43 +92,44 @@ class Server():
         except ConnectionAbortedError:
             pass
         except HandshakeError:
-            log.error(f"Error in handshake {address}.")
+            log.critical(f"Error in handshake {address}.")
         except Exception as e:
+            print(type(e))
             log.error(e)
         finally:
             conn.close()
-            del self.clients[address]
+            if address in self.clients:
+                del self.clients[address]
+                self.broadcast(None, f"{client.username} left the chat")
             log.info(f"Socket closed {address}.")
-            self.broadcast(None, f"{client.username} left the chat")
-    
+
     # Handle connection
-    def handshake(self, sock, address):#TODO clear le code
-        
-        # enc_pubkey = secure.export_key(passphrase=b"charlie")
-        # send(sock, enc_pubkey)
-        
-        # receive client public key
-        data = self.receive(sock)
-        if not data:
+    def handshake(self, sock, address, passphrase: bytes):#TODO clear le code
+        try:
+            # receive client public key
+            data = self.receive(sock)
+            if not data:
+                raise ConnectionResetError
+            pubkey = self.security.import_key(data, passphrase)
+            
+            # send session key
+            session_key, nonce = self.security.generate_aes_key()
+            data = self.security.encrypt_rsa(session_key + nonce, key=pubkey)
+            self.send(sock, data)
+            
+            #receive and broadcast username
+            data = self.receive(sock)
+            if not data:
+                raise ConnectionResetError
+            username = self.security.decrypt_aes(key=session_key, nonce=nonce, ciphertext=data)
+            
+            client = Client(sock, address, username.decode('utf-8'), pubkey, session_key, nonce)
+            self.clients[address] = client
+            self.broadcast(None, f"{client.username} joined the chat")
+            
+            return client
+        except ValueError as e:
             raise HandshakeError
-        pubkey = self.security.import_key(data)
-        
-        # send session key
-        session_key, nonce = self.security.generate_aes_key()
-        data = self.security.encrypt_rsa(session_key + nonce, key=pubkey)
-        self.send(sock, data)
-        
-        #receive and broadcast username
-        data = self.receive(sock)
-        if not data:
-            raise HandshakeError
-        username = self.security.decrypt_aes(key=session_key, nonce=nonce, ciphertext=data)
-        
-        client = Client(sock, address, username.decode('utf-8'), pubkey, session_key, nonce)
-        self.clients[address] = client
-        self.broadcast(None, f"{client.username} joined the chat")
-        
-        return client
 
     # broadcast a message to every clients except sender
     def broadcast(self, sender, payload):
