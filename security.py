@@ -3,8 +3,6 @@ from Crypto.Hash import SHA256
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
-from Crypto.Util.Padding import pad
-from Crypto.Util.Padding import unpad
 
 class Security():
     def __init__(self, save_keys=False):
