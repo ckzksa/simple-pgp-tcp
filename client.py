@@ -5,7 +5,7 @@ import logging
 import rich
 
 from rich.prompt import Prompt
-from security import Security
+from security import *
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
@@ -24,11 +24,16 @@ class HandshakeError(Exception):
 
 class Client():
     def __init__(self) -> None:
-        self.security = Security(save_keys=False)
         self.client_socket = None
+        self.private_key = None
+        self.public_key = None
         self.session_key = None
         self.nonce = None
         self.username = ""
+        
+        self.private_key, self.public_key = load_rsa_keys()
+        if not all((self.private_key, self.public_key)):
+            generate_rsa_keys(save=True)
         
     def start(self):
         try:
@@ -53,7 +58,7 @@ class Client():
         except KeyboardInterrupt:
             log.info("SIGINT received, closing the socket and exiting.")
         except HandshakeError:
-            log.critical()
+            log.critical("Error in handshake.")
         except Exception as e:
             log.error(e)
         finally:
@@ -61,20 +66,20 @@ class Client():
                 client.client_socket.close()
 
     # Handle connection
-    def handshake(self, sock, passphrase: bytes=None):#TODO clear le code
+    def handshake(self, sock, passphrase: bytes=None):
         try:
             # send public key
-            pubkey = self.security.export_key(passphrase=passphrase)
+            pubkey = export_key(self.public_key, passphrase=passphrase)
             self.send(sock, pubkey)
             
             # receive session key
             data = self.receive(sock)
-            data = self.security.decrypt_rsa(data, key=self.security.private_key)
+            data = decrypt_rsa(data, key=self.private_key)
             self.session_key = data[:16]
             self.nonce = data[16:]
             
             # send username
-            data, _ = self.security.encrypt_aes(key=self.session_key, nonce=self.nonce, payload=self.username.encode("utf-8"))
+            data, _ = encrypt_aes(key=self.session_key, nonce=self.nonce, payload=self.username.encode("utf-8"))
             self.send(sock, data)
         except:
             raise HandshakeError
@@ -90,7 +95,7 @@ class Client():
                 if not payload:
                     pass
                 else:
-                    payload, _ = self.security.encrypt_aes(self.session_key, self.nonce, payload.encode("utf-8"))
+                    payload, _ = encrypt_aes(self.session_key, self.nonce, payload.encode("utf-8"))
                     self.send(client_socket, payload)
                     
         except EOFError:
@@ -102,7 +107,7 @@ class Client():
         try:
             while True:
                 payload = self.receive(client_socket)
-                payload = self.security.decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=payload)
+                payload = decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=payload)
                 print(f"{payload.decode('utf-8')}")
         except ConnectionResetError:
             print("Connection reset by host.")
@@ -131,9 +136,3 @@ class Client():
 if __name__ =="__main__":
     client = Client()
     client.start()
-    # def sigint_handler(sig, frame):
-    #     log.info("SIGINT received, closing the socket and exiting.")
-    #     print("mehj")
-    #     if client.client_socket:
-    #         client.client_socket.close()
-    # signal.signal(signal.SIGINT, sigint_handler)

@@ -4,7 +4,7 @@ import sys
 import signal
 import logging
 
-from security import Security
+from security import *
 from logging.handlers import TimedRotatingFileHandler
 
 log = logging.getLogger(__name__)
@@ -31,11 +31,11 @@ class HandshakeError(Exception):
     pass
 
 class Client():
-    def __init__(self, sock, address, username, pubkey, session_key, nonce):
+    def __init__(self, sock, address, username, public_key, session_key, nonce):
         self.sock = sock
         self.address = address
         self.username = username
-        self.pubkey = pubkey
+        self.public_key = public_key
         self.session_key = session_key
         self.nonce = nonce
         
@@ -43,7 +43,8 @@ class Server():
     def __init__(self, host, port) -> None:
         self.host = host
         self.port = port
-        self.security = Security(save_keys=True)
+        self.private_key = None
+        self.public_key = None
         self.server_socket = None
         self.clients = {}
         
@@ -83,7 +84,7 @@ class Server():
                 if not payload:
                     break
                 
-                payload = self.security.decrypt_aes(key=client.session_key, nonce=client.nonce, ciphertext=payload)
+                payload = decrypt_aes(key=client.session_key, nonce=client.nonce, ciphertext=payload)
                 payload = payload.decode('utf-8')
                 log.debug(f"New message from {client.username}: {payload}.")
                 self.broadcast(client, payload)
@@ -104,24 +105,24 @@ class Server():
             log.info(f"Socket closed {address}.")
 
     # Handle connection
-    def handshake(self, sock, address, passphrase: bytes):#TODO clear le code
+    def handshake(self, sock, address, passphrase: bytes):
         try:
             # receive client public key
             data = self.receive(sock)
             if not data:
                 raise ConnectionResetError
-            pubkey = self.security.import_key(data, passphrase)
+            pubkey = import_key(data, passphrase)
             
             # send session key
-            session_key, nonce = self.security.generate_aes_key()
-            data = self.security.encrypt_rsa(session_key + nonce, key=pubkey)
+            session_key, nonce = generate_aes_key()
+            data = encrypt_rsa(session_key + nonce, key=pubkey)
             self.send(sock, data)
             
             #receive and broadcast username
             data = self.receive(sock)
             if not data:
                 raise ConnectionResetError
-            username = self.security.decrypt_aes(key=session_key, nonce=nonce, ciphertext=data)
+            username = decrypt_aes(key=session_key, nonce=nonce, ciphertext=data)
             
             client = Client(sock, address, username.decode('utf-8'), pubkey, session_key, nonce)
             self.clients[address] = client
@@ -139,9 +140,9 @@ class Server():
                 continue
             
             try:
-                enc_payload, _ = self.security.encrypt_aes(client.session_key,
-                                                    client.nonce,
-                                                    f"<{sender.username if sender else 'SERVER'}> {payload}".encode("utf-8"))
+                enc_payload, _ = encrypt_aes(client.session_key,
+                                            client.nonce,
+                                            f"<{sender.username if sender else 'SERVER'}> {payload}".encode("utf-8"))
                 self.send(client.sock, enc_payload)
             except Exception as e:
                 log.error(f"Error sending message to {client.username} {client.address}. {e}")
