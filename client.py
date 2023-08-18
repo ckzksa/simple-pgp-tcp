@@ -1,7 +1,7 @@
 import socket
 import threading
-import signal
 import logging
+import math
 import rich
 
 from rich.prompt import Prompt
@@ -16,17 +16,21 @@ file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 log.addHandler(file_handler)
 
-SERVER = "127.0.0.1"
-PORT = 4321
+NUMBER_BYTES_HEADER = 4
+MAX_CHUNKS = 2 ** (8*NUMBER_BYTES_HEADER) - 1
+CHUNK_SIZE = 1024
 
 class HandshakeError(Exception):
     pass
 
 class Client():
-    def __init__(self) -> None:
+    def __init__(self, host, port) -> None:
+        self.host = host
+        self.port = port
         self.client_socket = None
         self.private_key = None
         self.public_key = None
+        self.server_public_key = None
         self.session_key = None
         self.nonce = None
         self.username = ""
@@ -41,15 +45,15 @@ class Client():
                 self.username = Prompt.ask("[bold green]Username[/bold green]")
             
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.connect((SERVER, PORT))
+            self.client_socket.connect((self.host, self.port))
             
             self.handshake(self.client_socket, b"verystrongpassword")
             
-            log.debug(f"Connected to server {SERVER} : {PORT}.")
-            print(f"Connected to server {SERVER} : {PORT}.")
+            log.debug(f"Connected to server {self.host} : {self.port}.")
+            print(f"Connected to server {self.host} : {self.port}.")
             
-            send_thread = threading.Thread(target=self.client_send, args = (self.client_socket,), daemon = True)
-            receive_thread = threading.Thread(target=self.client_receive, args = (self.client_socket,), daemon = True)
+            send_thread = threading.Thread(target=self.client_send, daemon = True)
+            receive_thread = threading.Thread(target=self.client_receive, daemon = True)
             send_thread.start()
             receive_thread.start()
             
@@ -68,47 +72,51 @@ class Client():
     # Handle connection
     def handshake(self, sock, passphrase: bytes=None):
         try:
-            # send public key
+            # Send public key
             pubkey = export_key(self.public_key, passphrase=passphrase)
-            self.send(sock, pubkey)
+            sock.sendall(pubkey)
             
-            # receive session key
-            data = self.receive(sock)
+            # Receive session key
+            data = sock.recv(CHUNK_SIZE)
             data = decrypt_rsa(data, key=self.private_key)
             self.session_key = data[:16]
             self.nonce = data[16:]
             
-            # send username
-            data, _ = encrypt_aes(key=self.session_key, nonce=self.nonce, payload=self.username.encode("utf-8"))
-            self.send(sock, data)
+            # Receive server public key
+            data = sock.recv(CHUNK_SIZE)
+            if not data:
+                raise ConnectionResetError
+            data = decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=data)
+            self.server_public_key = import_key(data)
+            
+            # Send username
+            data, _ = encrypt_aes(key=self.session_key, nonce=self.nonce, data=self.username.encode("utf-8"))
+            sock.sendall(data)
         except:
             raise HandshakeError
 
-    def client_send(self, client_socket):
+    def client_send(self):
         try:
             while True:
-                payload = ""
-                while not payload:
+                message = ""
+                while not message:
                     rich.print(f"<[bold violet]{self.username}[/bold violet]> ", end='')
-                    payload = input()
+                    message = input()
                     
-                if not payload:
+                if not message:
                     pass
                 else:
-                    payload, _ = encrypt_aes(self.session_key, self.nonce, payload.encode("utf-8"))
-                    self.send(client_socket, payload)
-                    
+                    self.send(message.encode("utf-8"))
         except EOFError:
             pass
         except Exception as e:
             log.error(e)
 
-    def client_receive(self, client_socket):
+    def client_receive(self):
         try:
             while True:
-                payload = self.receive(client_socket)
-                payload = decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=payload)
-                print(f"{payload.decode('utf-8')}")
+                message, signature = self.receive()
+                print(f"{message.decode('utf-8')}")
         except ConnectionResetError:
             print("Connection reset by host.")
             log.info(f"Connection reset by host.")
@@ -119,20 +127,32 @@ class Client():
         except Exception as e:
             log.error(e)
 
-    def send(self, sock, payload):
-        sock.sendall(payload + b"\n\n")
+    def send(self, message):
+        message_hash = rsa_sign(self.private_key, message)
+        num_chunks = math.ceil(len(message) / CHUNK_SIZE)
+        encrypted_num_chunks, _ = encrypt_aes(self.session_key, self.nonce, num_chunks.to_bytes(4, byteorder='big'))
+        self.client_socket.sendall(encrypted_num_chunks + message_hash)
+        
+        for i in range(0, len(message), CHUNK_SIZE):
+            chunk = message[i:i + CHUNK_SIZE]
+            encrypted_chunk, _ = encrypt_aes(self.session_key, self.nonce, chunk)
+            self.client_socket.sendall(encrypted_chunk)
 
-    def receive(self, sock):
-        payload = b""
+    def receive(self):
+        message_header = self.client_socket.recv(256 + NUMBER_BYTES_HEADER)
+        message_length = decrypt_aes(self.session_key, self.nonce, message_header[:4])
+        message_length = int.from_bytes(message_length, byteorder='big')
+        message_signature = message_header[NUMBER_BYTES_HEADER:]
         
-        while not payload.endswith(b"\n\n"):
-            data = sock.recv(1024)
-            if not data:
-                return None
-            payload = payload + data
+        chunks = []
+        for _ in range(message_length):
+            chunk = self.client_socket.recv(CHUNK_SIZE)
+            chunk = decrypt_aes(self.session_key, self.nonce, chunk)
+            chunks.append(chunk)
+        data = b"".join(chunks)
         
-        return payload[:-2]
+        return data, message_signature
 
 if __name__ =="__main__":
-    client = Client()
+    client = Client("127.0.0.1", 4321)
     client.start()

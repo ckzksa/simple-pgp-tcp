@@ -1,6 +1,7 @@
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
 from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Signature import pkcs1_15
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
@@ -23,13 +24,13 @@ def load_rsa_keys():
         
     return private_key, public_key
 
-def encrypt_rsa(payload: bytes, key):
+def encrypt_rsa(message: bytes, key):
     cipher = PKCS1_OAEP.new(key)
-    return cipher.encrypt(payload)
+    return cipher.encrypt(message)
 
-def decrypt_rsa(payload: bytes, key):
+def decrypt_rsa(message: bytes, key):
     cipher = PKCS1_OAEP.new(key)
-    return cipher.decrypt(payload)
+    return cipher.decrypt(message)
 
 def export_key(key, passphrase: bytes=None):
     return key.exportKey(passphrase=passphrase, pkcs=8, protection="scryptAndAES128-CBC")
@@ -37,14 +38,27 @@ def export_key(key, passphrase: bytes=None):
 def import_key(key, passphrase: bytes=None):
     return RSA.import_key(key, passphrase=passphrase)
 
+def rsa_sign(key, message):
+    hash = SHA256.new(message)
+    signature = pkcs1_15.new(key).sign(hash)
+    return signature
+
+def rsa_verify(key, message, signature):
+    hash = SHA256.new(message)
+    try:
+        pkcs1_15.new(key).verify(hash, signature)
+        return True
+    except (ValueError):
+        return False
+
 def generate_aes_key():
     key = get_random_bytes(16)
     nonce = get_random_bytes(16)
     return key, nonce
 
-def encrypt_aes(key, nonce, payload):
+def encrypt_aes(key, nonce, data):
     cipher = AES.new(key, AES.MODE_EAX, nonce=nonce)
-    return cipher.encrypt_and_digest(payload)
+    return cipher.encrypt_and_digest(data)
 
 def decrypt_aes(key, nonce, ciphertext, tag=None):
     cipher_aes = AES.new(key, AES.MODE_EAX, nonce)

@@ -2,17 +2,18 @@ import threading
 import socket
 import sys
 import signal
+import math
 import logging
 
 from security import *
 from logging.handlers import TimedRotatingFileHandler
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%d-%b-%y %H:%M:%S")
 
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.DEBUG)
 console_handler.setFormatter(formatter)
 log.addHandler(console_handler)
 
@@ -24,8 +25,9 @@ file_handler.setFormatter(formatter)
 log.addHandler(console_handler)
 log.addHandler(file_handler)
 
-HOST = "0.0.0.0"
-PORT = 4321
+NUMBER_BYTES_HEADER = 4
+MAX_CHUNKS = 2 ** (8*NUMBER_BYTES_HEADER) - 1
+CHUNK_SIZE = 1024
 
 class HandshakeError(Exception):
     pass
@@ -48,6 +50,10 @@ class Server():
         self.server_socket = None
         self.clients = {}
         
+        self.private_key, self.public_key = load_rsa_keys()
+        if not all((self.private_key, self.public_key)):
+            generate_rsa_keys(save=True)
+        
         def sigint_handler(sig, frame):
             log.info("SIGINT received, closing the socket and exiting.")
             if self.server_socket:
@@ -57,7 +63,7 @@ class Server():
             sys.exit(0)
         signal.signal(signal.SIGINT, sigint_handler)
     
-    # start server and client threads
+    # Start server and client threads
     def start(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.settimeout(4) # handle blocked SIGINT on Win
@@ -72,7 +78,7 @@ class Server():
                 thread.start()
                 log.info(f"New client {address}.")
             except socket.timeout:
-                log.debug(f"Timeout.")
+                # log.debug(f"Timeout.")
                 pass
     
     # Handle the client
@@ -80,14 +86,14 @@ class Server():
         try:
             client = self.handshake(conn, address, b"verystrongpassword")
             while True:
-                payload = self.receive(conn)
-                if not payload:
+                message, signature = self.receive(client)
+                if not message:
+                    print("null msg")
                     break
+                message = message.decode("utf-8")
                 
-                payload = decrypt_aes(key=client.session_key, nonce=client.nonce, ciphertext=payload)
-                payload = payload.decode('utf-8')
-                log.debug(f"New message from {client.username}: {payload}.")
-                self.broadcast(client, payload)
+                log.debug(f"New message from {client.username}: {message}")
+                self.broadcast(client, message)
         except ConnectionResetError:
             log.info(f"Connection reset {address}.")
         except ConnectionAbortedError:
@@ -95,6 +101,8 @@ class Server():
         except HandshakeError:
             log.critical(f"Error in handshake {address}.")
         except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            print(exc_type, exc_tb.tb_lineno)
             print(type(e))
             log.error(e)
         finally:
@@ -107,63 +115,76 @@ class Server():
     # Handle connection
     def handshake(self, sock, address, passphrase: bytes):
         try:
-            # receive client public key
-            data = self.receive(sock)
+            # Receive client public key
+            data = sock.recv(CHUNK_SIZE)
             if not data:
                 raise ConnectionResetError
             pubkey = import_key(data, passphrase)
             
-            # send session key
+            # Send session key
             session_key, nonce = generate_aes_key()
             data = encrypt_rsa(session_key + nonce, key=pubkey)
-            self.send(sock, data)
+            sock.sendall(data)
             
-            #receive and broadcast username
-            data = self.receive(sock)
+            # Send public key
+            pubkey = export_key(self.public_key)
+            data, _ = encrypt_aes(key=session_key, nonce=nonce, data=pubkey)
+            sock.sendall(data)
+            
+            # Receive and broadcast username
+            data = sock.recv(CHUNK_SIZE)
             if not data:
                 raise ConnectionResetError
             username = decrypt_aes(key=session_key, nonce=nonce, ciphertext=data)
             
-            client = Client(sock, address, username.decode('utf-8'), pubkey, session_key, nonce)
+            client = Client(sock, address, username.decode("utf-8"), pubkey, session_key, nonce)
             self.clients[address] = client
             self.broadcast(None, f"{client.username} joined the chat")
-            
             return client
         except ValueError as e:
             raise HandshakeError
 
-    # broadcast a message to every clients except sender
-    def broadcast(self, sender, payload):
+    # Broadcast a message to every clients except sender
+    def broadcast(self, sender, message):
         for _, client in self.clients.items():
-            # don't send message to sender
+            # Don't send message to sender
             if sender and sender.address == client.address:
                 continue
             
             try:
-                enc_payload, _ = encrypt_aes(client.session_key,
-                                            client.nonce,
-                                            f"<{sender.username if sender else 'SERVER'}> {payload}".encode("utf-8"))
-                self.send(client.sock, enc_payload)
+                self.send(client, f"<{sender.username if sender else 'SERVER'}> {message}".encode("utf-8"))
             except Exception as e:
                 log.error(f"Error sending message to {client.username} {client.address}. {e}")
 
-    # send the whole message and end it with a double newline
-    def send(self, sock, payload):
-        sock.sendall(payload + b"\n\n")
+    # Send the whole message and end it with a double newline
+    def send(self, client, message):
+        message_hash = rsa_sign(self.private_key, message)
+        num_chunks = math.ceil(len(message) / CHUNK_SIZE)
+        encrypted_num_chunks, _ = encrypt_aes(client.session_key, client.nonce, num_chunks.to_bytes(4, byteorder='big'))
+        
+        client.sock.sendall(encrypted_num_chunks + message_hash)
+        for i in range(0, len(message), CHUNK_SIZE):
+            chunk = message[i:i + CHUNK_SIZE]
+            encrypted_chunk, _ = encrypt_aes(client.session_key, client.nonce, chunk)
+            client.sock.sendall(encrypted_chunk)
 
-    # retrieve data until a double newline
-    def receive(self, sock):
-        payload = b""
+    # Retrieve data until a double newline
+    def receive(self, client):
+        message_header = client.sock.recv(256 + NUMBER_BYTES_HEADER)
+        message_length = decrypt_aes(client.session_key, client.nonce, message_header[:4])
+        message_length = int.from_bytes(message_length, byteorder='big')
+        message_signature = message_header[NUMBER_BYTES_HEADER:]
         
-        while not payload.endswith(b"\n\n"): #TODO changer ca, risque faible d'erreur
-            data = sock.recv(1024)
-            if not data:
-                return None
-            payload = payload + data
+        chunks = []
+        for _ in range(message_length):
+            chunk = client.sock.recv(CHUNK_SIZE)
+            chunk = decrypt_aes(client.session_key, client.nonce, chunk)
+            chunks.append(chunk)
+        data = b"".join(chunks)
         
-        return payload[:-2]
+        return data, message_signature
 
 
 if __name__ == "__main__":
-    server = Server(HOST, PORT)
+    server = Server("127.0.0.1", 4321)
     server.start()
