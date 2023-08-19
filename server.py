@@ -88,7 +88,6 @@ class Server():
             while True:
                 message, signature = self.receive(client)
                 if not message:
-                    print("null msg")
                     break
                 message = message.decode("utf-8")
                 
@@ -152,7 +151,8 @@ class Server():
                 continue
             
             try:
-                self.send(client, f"<{sender.username if sender else 'SERVER'}> {message}".encode("utf-8"))
+                formatted_message = f'{{"username":"{sender.username if sender else "SERVER"}", "message":"{message}"}}'.encode("utf-8")
+                self.send(client, formatted_message)
             except Exception as e:
                 log.error(f"Error sending message to {client.username} {client.address}. {e}")
 

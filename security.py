@@ -1,5 +1,6 @@
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
+from Crypto.Hash import SHA512
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Signature import pkcs1_15
 from Crypto.Cipher import AES
@@ -70,4 +71,8 @@ def decrypt_aes(key, nonce, ciphertext, tag=None):
 
 def sha_256(data: bytes):
     hashObject = SHA256.new(data=data)
+    return hashObject.digest()
+
+def sha_512(data: bytes):
+    hashObject = SHA512.new(data=data)
     return hashObject.digest()

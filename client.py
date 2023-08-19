@@ -3,7 +3,9 @@ import threading
 import logging
 import math
 import rich
+import json
 
+from collections import namedtuple
 from rich.prompt import Prompt
 from security import *
 
@@ -23,6 +25,8 @@ CHUNK_SIZE = 1024
 class HandshakeError(Exception):
     pass
 
+AesKey = namedtuple('AesKey', ['key', 'nonce'])
+
 class Client():
     def __init__(self, host, port) -> None:
         self.host = host
@@ -31,6 +35,7 @@ class Client():
         self.private_key = None
         self.public_key = None
         self.server_public_key = None
+        self.e2e_key = None
         self.session_key = None
         self.nonce = None
         self.username = ""
@@ -39,10 +44,17 @@ class Client():
         if not all((self.private_key, self.public_key)):
             generate_rsa_keys(save=True)
         
-    def start(self):
+    def start(self, e2e_encryption=False):
         try:
             while not self.username:
                 self.username = Prompt.ask("[bold green]Username[/bold green]")
+            
+            if e2e_encryption:
+                password = ""
+                while not password:
+                    password = Prompt.ask("[bold green]End-to-end password[/bold green]")
+                password = sha_512(password.encode())
+                self.e2e_key = AesKey(password[:32], password[32:])
             
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((self.host, self.port))
@@ -106,7 +118,11 @@ class Client():
                 if not message:
                     pass
                 else:
-                    self.send(message.encode("utf-8"))
+                    message = message.encode("utf-8")
+                    if self.e2e_key:
+                        message, _ = encrypt_aes(key=self.e2e_key.key, nonce=self.e2e_key.nonce, data=message)
+                        message = message.hex().encode("utf-8")
+                    self.send(message)
         except EOFError:
             pass
         except Exception as e:
@@ -116,7 +132,13 @@ class Client():
         try:
             while True:
                 message, signature = self.receive()
-                print(f"{message.decode('utf-8')}")
+                message = json.loads(message.decode('utf-8'))
+                username = message["username"]
+                message = message["message"]
+                if self.e2e_key and username != "SERVER":
+                    message = bytes.fromhex(message)
+                    message = decrypt_aes(self.e2e_key.key, self.e2e_key.nonce, message).decode('utf-8')
+                print(f"<{username}> {message}")
         except ConnectionResetError:
             print("Connection reset by host.")
             log.info(f"Connection reset by host.")
@@ -155,4 +177,4 @@ class Client():
 
 if __name__ =="__main__":
     client = Client("127.0.0.1", 4321)
-    client.start()
+    client.start(e2e_encryption=True)
