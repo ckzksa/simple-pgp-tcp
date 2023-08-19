@@ -69,8 +69,7 @@ class Server():
         
     def load_config(self, path):
         with open(path) as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-        return config
+            return yaml.load(f, Loader=yaml.FullLoader)
 
     def dump_config(self, path, field ,value):
         config[field] = value
@@ -162,7 +161,7 @@ class Server():
                 continue
             
             try:
-                formatted_message = f'{{"username":"{sender.username if sender else "SERVER"}", "message":"{message}"}}'.encode("utf-8")
+                formatted_message = f'{{"username":"{sender.username if sender else self.name}", "message":"{message}"}}'.encode("utf-8")
                 self.send(client, formatted_message)
             except Exception as e:
                 log.error(f"Error sending message to {client.username} {client.address}. {e}")

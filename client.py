@@ -30,22 +30,20 @@ AesKey = namedtuple('AesKey', ['key', 'nonce'])
 
 class Client():
     def __init__(self, config_path="./client_config.yaml", e2e_encryption=False) -> None:
-        
         config = self.load_config(config_path)
-        
         self.host = config["server_ip"]
         self.port = config["server_port"]
+        self.username = config["username"]
+        self.rsa_passphrase = config["rsa_passphrase"].encode()
+        if e2e_encryption:
+            e2e_passphrase = sha_512(config["e2e_passphrase"].encode())
+            self.e2e_key = AesKey(e2e_passphrase[:32], e2e_passphrase[32:])
         self.client_socket = None
         self.private_key = None
         self.public_key = None
         self.server_public_key = None
         self.session_key = None
         self.nonce = None
-        self.username = config["username"]
-        self.rsa_passphrase = config["rsa_passphrase"].encode()
-        if e2e_encryption:
-            e2e_passphrase = sha_512(config["e2e_passphrase"].encode())
-            self.e2e_key = AesKey(e2e_passphrase[:32], e2e_passphrase[32:])
         
         self.private_key, self.public_key = load_rsa_keys()
         if not all((self.private_key, self.public_key)):
@@ -53,8 +51,7 @@ class Client():
             
     def load_config(self, path):
         with open(path) as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-        return config
+            return yaml.load(f, Loader=yaml.FullLoader)
 
     def dump_config(self, path, field ,value):
         config[field] = value
