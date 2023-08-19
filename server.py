@@ -78,7 +78,6 @@ class Server():
                 thread.start()
                 log.info(f"New client {address}.")
             except socket.timeout:
-                # log.debug(f"Timeout.")
                 pass
     
     # Handle the client
@@ -100,9 +99,6 @@ class Server():
         except HandshakeError:
             log.critical(f"Error in handshake {address}.")
         except Exception as e:
-            exc_type, exc_obj, exc_tb = sys.exc_info()
-            print(exc_type, exc_tb.tb_lineno)
-            print(type(e))
             log.error(e)
         finally:
             conn.close()
