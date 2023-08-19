@@ -4,6 +4,7 @@ import sys
 import signal
 import math
 import logging
+import yaml
 
 from security import *
 from logging.handlers import TimedRotatingFileHandler
@@ -42,9 +43,12 @@ class Client():
         self.nonce = nonce
         
 class Server():
-    def __init__(self, host, port) -> None:
-        self.host = host
-        self.port = port
+    def __init__(self, config_path="./server_config.yaml") -> None:
+        config = self.load_config(config_path)
+        self.host = config["server_ip"]
+        self.port = config["server_port"]
+        self.name = config["server_name"]
+        self.rsa_passphrase = config["rsa_passphrase"].encode()
         self.private_key = None
         self.public_key = None
         self.server_socket = None
@@ -62,6 +66,17 @@ class Server():
                 client.sock.close()
             sys.exit(0)
         signal.signal(signal.SIGINT, sigint_handler)
+        
+    def load_config(self, path):
+        with open(path) as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        return config
+
+    def dump_config(self, path, field ,value):
+        config[field] = value
+        with open(path, "w") as f:
+            config = yaml.dump(config, stream=f, default_flow_style=False, sort_keys=False)
+            
     
     # Start server and client threads
     def start(self):
@@ -83,7 +98,7 @@ class Server():
     # Handle the client
     def client_thread(self, conn, address):
         try:
-            client = self.handshake(conn, address, b"verystrongpassword")
+            client = self.handshake(conn, address, self.rsa_passphrase)
             while True:
                 message, signature = self.receive(client)
                 if not message:
@@ -182,5 +197,5 @@ class Server():
 
 
 if __name__ == "__main__":
-    server = Server("127.0.0.1", 4321)
+    server = Server("./server_config.yaml")
     server.start()

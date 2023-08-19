@@ -42,7 +42,6 @@ class Client():
         self.session_key = None
         self.nonce = None
         self.username = config["username"]
-        print(config["rsa_passphrase"])
         self.rsa_passphrase = config["rsa_passphrase"].encode()
         if e2e_encryption:
             e2e_passphrase = sha_512(config["e2e_passphrase"].encode())
@@ -104,7 +103,6 @@ class Client():
             
             # Receive server public key
             data = sock.recv(CHUNK_SIZE)
-            print(f"bite {data}")
             if not data:
                 raise ConnectionResetError
             data = decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=data)
