@@ -4,6 +4,7 @@ import logging
 import math
 import rich
 import json
+import yaml
 
 from collections import namedtuple
 from rich.prompt import Prompt
@@ -28,38 +29,45 @@ class HandshakeError(Exception):
 AesKey = namedtuple('AesKey', ['key', 'nonce'])
 
 class Client():
-    def __init__(self, host, port) -> None:
-        self.host = host
-        self.port = port
+    def __init__(self, config_path="./client_config.yaml", e2e_encryption=False) -> None:
+        
+        config = self.load_config(config_path)
+        
+        self.host = config["server_ip"]
+        self.port = config["server_port"]
         self.client_socket = None
         self.private_key = None
         self.public_key = None
         self.server_public_key = None
-        self.e2e_key = None
         self.session_key = None
         self.nonce = None
-        self.username = ""
+        self.username = config["username"]
+        print(config["rsa_passphrase"])
+        self.rsa_passphrase = config["rsa_passphrase"].encode()
+        if e2e_encryption:
+            e2e_passphrase = sha_512(config["e2e_passphrase"].encode())
+            self.e2e_key = AesKey(e2e_passphrase[:32], e2e_passphrase[32:])
         
         self.private_key, self.public_key = load_rsa_keys()
         if not all((self.private_key, self.public_key)):
             generate_rsa_keys(save=True)
+            
+    def load_config(self, path):
+        with open(path) as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        return config
+
+    def dump_config(self, path, field ,value):
+        config[field] = value
+        with open(path, "w") as f:
+            config = yaml.dump(config, stream=f, default_flow_style=False, sort_keys=False)
         
-    def start(self, e2e_encryption=False):
+    def start(self):
         try:
-            while not self.username:
-                self.username = Prompt.ask("[bold green]Username[/bold green]")
-            
-            if e2e_encryption:
-                password = ""
-                while not password:
-                    password = Prompt.ask("[bold green]End-to-end password[/bold green]")
-                password = sha_512(password.encode())
-                self.e2e_key = AesKey(password[:32], password[32:])
-            
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((self.host, self.port))
             
-            self.handshake(self.client_socket, b"verystrongpassword")
+            self.handshake(self.client_socket, self.rsa_passphrase)
             
             log.debug(f"Connected to server {self.host} : {self.port}.")
             print(f"Connected to server {self.host} : {self.port}.")
@@ -96,6 +104,7 @@ class Client():
             
             # Receive server public key
             data = sock.recv(CHUNK_SIZE)
+            print(f"bite {data}")
             if not data:
                 raise ConnectionResetError
             data = decrypt_aes(key=self.session_key, nonce=self.nonce, ciphertext=data)
@@ -104,7 +113,7 @@ class Client():
             # Send username
             data, _ = encrypt_aes(key=self.session_key, nonce=self.nonce, data=self.username.encode("utf-8"))
             sock.sendall(data)
-        except:
+        except ValueError:
             raise HandshakeError
 
     def client_send(self):
@@ -176,5 +185,5 @@ class Client():
         return data, message_signature
 
 if __name__ =="__main__":
-    client = Client("127.0.0.1", 4321)
-    client.start(e2e_encryption=True)
+    client = Client("./client_config.yaml", e2e_encryption=True)
+    client.start()
